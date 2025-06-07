@@ -1,0 +1,32 @@
+dependencies:
+  espressif/dhara:
+    component_hash: e6c1593523e023e7de93dd8ed6e867fe42e881736b95a5a89e046eab42d013ce
+    dependencies: []
+    source:
+      registry_url: https://components.espressif.com
+      type: service
+    version: 0.1.0
+  espressif/spi_nand_flash:
+    component_hash: 5a472abe20a662b8b787a6f2fb6af9d10adf12c064dae882ac6ded8076c8a5ff
+    dependencies:
+    - name: espressif/dhara
+      registry_url: https://components.espressif.com
+      require: private
+      version: 0.1.*
+    - name: idf
+      require: private
+      version: '>=5.0'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 0.11.0
+  idf:
+    source:
+      type: idf
+    version: 5.4.1
+direct_dependencies:
+- espressif/spi_nand_flash
+- idf
+manifest_hash: 3904505a2e0b67a8ce1e1efc5bf7e540eb8e4e50a7b4bd685180f68e4ebb6411
+target: esp32s3
+version: 2.0.0
