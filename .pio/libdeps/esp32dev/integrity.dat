@@ -1,0 +1,5 @@
+kochcodes/mbedtls@3.6.2
+suculent/AESLib@^2.3.6
+earlephilhower/ESP8266Audio@^1.9.7
+bblanchon/ArduinoJson@^7.1.0
+sstaub/Ticker@^4.4.0

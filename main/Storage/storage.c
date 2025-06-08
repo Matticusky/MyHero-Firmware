@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <string.h>
 #include <esp_err.h>
 #include <esp_log.h>
 #include <esp_system.h>
@@ -159,4 +160,17 @@ void print_storage_info() {
     ESP_LOGI(TAG, "Total Size: %zu bytes", total_size);
     ESP_LOGI(TAG, "Used Size: %zu bytes", used_size);
     ESP_LOGI(TAG, "Free Size: %zu bytes", free_size);
+}
+
+void get_base_path(char *path, size_t size) {
+    if (path == NULL || size == 0) {
+        ESP_LOGE(TAG, "Invalid path or size");
+        return;
+    }
+    if (size < (strlen(base_path) + 1)) {
+        ESP_LOGE(TAG, "Path buffer is too small");
+        return;
+    }
+    snprintf(path, size, "%s", base_path);
+    ESP_LOGI(TAG, "Base path: %s", path);
 }
