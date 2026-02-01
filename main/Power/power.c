@@ -136,4 +136,24 @@ uint16_t get_bat_voltage(){
     return voltage*2;
 }
 
+uint8_t get_battery_percent(void) {
+    uint16_t voltage_mv = get_bat_voltage();
+
+    // Clamp to valid range
+    if (voltage_mv >= BATTERY_VOLTAGE_FULL) {
+        return 100;
+    }
+    if (voltage_mv <= BATTERY_VOLTAGE_EMPTY) {
+        return 0;
+    }
+
+    // Linear interpolation between empty and full
+    // percent = (voltage - empty) / (full - empty) * 100
+    uint32_t range = BATTERY_VOLTAGE_FULL - BATTERY_VOLTAGE_EMPTY;
+    uint32_t offset = voltage_mv - BATTERY_VOLTAGE_EMPTY;
+    uint8_t percent = (uint8_t)((offset * 100) / range);
+
+    return percent;
+}
+
 

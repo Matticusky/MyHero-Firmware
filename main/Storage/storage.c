@@ -1,5 +1,8 @@
 #include <stdio.h>
 #include <string.h>
+#include <dirent.h>
+#include <sys/stat.h>
+#include <unistd.h>
 #include <esp_err.h>
 #include <esp_log.h>
 #include <esp_system.h>
@@ -173,4 +176,119 @@ void get_base_path(char *path, size_t size) {
     }
     snprintf(path, size, "%s", base_path);
     ESP_LOGI(TAG, "Base path: %s", path);
+}
+
+esp_err_t storage_scan_audio_files(storage_scan_cb_t callback, void *user_data) {
+    if (!callback) {
+        ESP_LOGE(TAG, "Invalid callback");
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    DIR *dir = opendir(base_path);
+    if (!dir) {
+        ESP_LOGE(TAG, "Failed to open directory: %s", base_path);
+        return ESP_FAIL;
+    }
+
+    struct dirent *entry;
+    char full_path[300];
+    int file_count = 0;
+
+    while ((entry = readdir(dir)) != NULL) {
+        // Skip directories
+        if (entry->d_type == DT_DIR) {
+            continue;
+        }
+
+        // Check for .wav extension (case insensitive)
+        const char *ext = strrchr(entry->d_name, '.');
+        if (ext && (strcasecmp(ext, ".wav") == 0)) {
+            snprintf(full_path, sizeof(full_path), "%s/%s", base_path, entry->d_name);
+            callback(full_path, user_data);
+            file_count++;
+        }
+    }
+
+    closedir(dir);
+    ESP_LOGI(TAG, "Scanned %d audio files", file_count);
+    return ESP_OK;
+}
+
+esp_err_t storage_generate_recording_path(char *path_buf, size_t buf_size) {
+    if (!path_buf || buf_size < 32) {
+        ESP_LOGE(TAG, "Invalid buffer");
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    int max_num = 0;
+
+    DIR *dir = opendir(base_path);
+    if (!dir) {
+        // Directory doesn't exist or error - start at 0001
+        snprintf(path_buf, buf_size, "%s/recording_0001.wav", base_path);
+        ESP_LOGI(TAG, "Generated recording path: %s", path_buf);
+        return ESP_OK;
+    }
+
+    struct dirent *entry;
+    while ((entry = readdir(dir)) != NULL) {
+        int num;
+        // Match pattern: recording_NNNN.wav
+        if (sscanf(entry->d_name, "recording_%d.wav", &num) == 1) {
+            if (num > max_num) {
+                max_num = num;
+            }
+        }
+    }
+    closedir(dir);
+
+    snprintf(path_buf, buf_size, "%s/recording_%04d.wav", base_path, max_num + 1);
+    ESP_LOGI(TAG, "Generated recording path: %s", path_buf);
+    return ESP_OK;
+}
+
+bool storage_file_exists(const char *path) {
+    if (!path) {
+        return false;
+    }
+
+    struct stat st;
+    return (stat(path, &st) == 0);
+}
+
+esp_err_t storage_delete_all_files(void) {
+    ESP_LOGW(TAG, "Deleting all files in storage...");
+
+    DIR *dir = opendir(base_path);
+    if (!dir) {
+        ESP_LOGE(TAG, "Failed to open directory: %s", base_path);
+        return ESP_FAIL;
+    }
+
+    struct dirent *entry;
+    char full_path[300];
+    int deleted_count = 0;
+    int failed_count = 0;
+
+    while ((entry = readdir(dir)) != NULL) {
+        // Skip directories (including . and ..)
+        if (entry->d_type == DT_DIR) {
+            continue;
+        }
+
+        snprintf(full_path, sizeof(full_path), "%s/%s", base_path, entry->d_name);
+
+        if (unlink(full_path) == 0) {
+            ESP_LOGI(TAG, "Deleted: %s", entry->d_name);
+            deleted_count++;
+        } else {
+            ESP_LOGE(TAG, "Failed to delete: %s", entry->d_name);
+            failed_count++;
+        }
+    }
+
+    closedir(dir);
+
+    ESP_LOGW(TAG, "Deleted %d files, %d failed", deleted_count, failed_count);
+    return (failed_count == 0) ? ESP_OK : ESP_FAIL;
 }

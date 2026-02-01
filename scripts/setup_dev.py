@@ -6,10 +6,8 @@ import subprocess
 import platform
 
 ADF_ORIGIN = "https://github.com/espressif/esp-adf.git"
-TARGET_IDF_VERSION = "6568f8c553f89c01c101da4d6c735379b8221858"
-TARGET_ADF_VERSION = "8a3b56a9b65af796164ebffc4e4bc45f144760b3"
-
-# detect OS, continue if it is linux or windows, exit otherwise
+TARGET_IDF_VERSION = "v5.5.2"
+TARGET_ADF_VERSION = "release/v2.x"
 
 def detect_os():
     os_name = platform.system()
@@ -19,109 +17,78 @@ def detect_os():
         print("Unsupported OS")
         exit(1)
 
+def run_command(cmd, error_msg):
+    try:
+        subprocess.run(cmd, check=True)
+        return True
+    except subprocess.CalledProcessError as e:
+        print(error_msg)
+        print(e)
+        exit(1)
 
-os_name=detect_os()
+def add_safe_directory():
+    pwd = os.getcwd()
+    run_command(
+        ["git", "config", "--global", "--add", "safe.directory", pwd],
+        "Error fixing git dubious path warning"
+    )
+    print(f"Added safe directory: {pwd}")
 
-# clone the ESP ADF repository, IDF is included as a submodule
-# clone to ADF directory
-try:
-    subprocess.run(["git", "clone", ADF_ORIGIN, "ADF"], check=True)
-    print("Cloned ESP ADF repository")
-except subprocess.CalledProcessError as e:
-    print("Error cloning ESP ADF repository")
-    print(e)
-    exit(1)
-    
-# change directory to ADF
+os_name = detect_os()
+
+# Step 1: Clone ADF repository
+run_command(
+    ["git", "clone", ADF_ORIGIN, "ADF"],
+    "Error cloning ESP ADF repository"
+)
+print("Cloned ESP ADF repository")
+
+# Step 2: cd into ADF and checkout target version
 os.chdir("ADF")
+add_safe_directory()
 
-# should also fix git dubious path warning
-try:
-    pwd = os.getcwd()
-    subprocess.run(["git", "config", "--global", "--add", "safe.directory",pwd], check=True)
-    print("Fixed git dubious path warning")
-except subprocess.CalledProcessError as e:
-    print("Error fixing git dubious path warning")
-    print(e)
-    exit(1)
-    
-    
-# initialize and update submodules
-try:
-    subprocess.run(["git", "submodule", "update", "--init", "--recursive"], check=True)
-    print("Initialized and updated submodules")
-except subprocess.CalledProcessError as e:
-    print("Error initializing and updating submodules")
-    print(e)
-    exit(1)
-    
+run_command(
+    ["git", "checkout", TARGET_ADF_VERSION],
+    "Error checking out correct version of ESP ADF"
+)
+print("Checked out correct version of ESP ADF")
 
-    
-# check out the correct version of ESP IDF
+# Step 3: Initialize ADF submodules (not recursive)
+run_command(
+    ["git", "submodule", "update", "--init"],
+    "Error initializing ADF submodules"
+)
+print("Initialized ADF submodules")
+
+# Step 4: cd into IDF and checkout target version
 os.chdir("esp-idf")
-# fix git dubious path warning
-try:
-    pwd = os.getcwd()
-    subprocess.run(["git", "config", "--global", "--add", "safe.directory",pwd], check=True)
-    print("Fixed git dubious path warning")
-except subprocess.CalledProcessError as e:
-    print("Error fixing git dubious path warning")
-    print(e)
-    exit(1)
-    
-try:
-    subprocess.run(["git", "checkout", TARGET_IDF_VERSION], check=True)
-    print("Checked out correct version of ESP IDF")
-except subprocess.CalledProcessError as e:
-    print("Error checking out correct version of ESP IDF")
-    print(e)
-    exit(1)
-# Install ESP IDF dependencies
-# scripts have .sh, .bat and .cmd extensions for linux, windows and mac respectively
-if os_name == "Linux":
-    try:
-        subprocess.run(["./install.sh"], check=True)
-        print("Installed ESP IDF dependencies")
-    except subprocess.CalledProcessError as e:
-        print("Error installing ESP IDF dependencies")
-        print(e)
-        exit(1)
+add_safe_directory()
 
-        
-elif os_name == "Windows":
-    try:
-        subprocess.run(["install.bat"], check=True)
-        print("Installed ESP IDF dependencies")
-    except subprocess.CalledProcessError as e:
-        print("Error installing ESP IDF dependencies")
-        print(e)
-        exit(1)
+run_command(
+    ["git", "checkout", TARGET_IDF_VERSION],
+    "Error checking out correct version of ESP IDF"
+)
+print("Checked out correct version of ESP IDF")
 
-        
+# Step 5: Initialize IDF submodules
+run_command(
+    ["git", "submodule", "update", "--init", "--recursive"],
+    "Error initializing IDF submodules"
+)
+print("Initialized IDF submodules")
 
-        
-# change back to ADF directory
+# Step 6: Go back to ADF and run install script
 os.chdir("..")
-# install ADF dependencies
+
 if os_name == "Linux":
-    try:
-        subprocess.run(["./install.sh"], check=True)
-        print("Installed ESP ADF dependencies")
-    except subprocess.CalledProcessError as e:
-        print("Error installing ESP ADF dependencies")
-        print(e)
-        exit(1)
+    run_command(["./install.sh"], "Error installing ADF dependencies")
 elif os_name == "Windows":
-    try:
-        subprocess.run(["install.bat"], check=True)
-        print("Installed ESP ADF dependencies")
-    except subprocess.CalledProcessError as e:
-        print("Error installing ESP ADF dependencies")
-        print(e)
-        exit(1)
-# change back to project root directory
+    run_command(["install.bat"], "Error installing ADF dependencies")
+
+print("Installed ESP ADF dependencies")
+
+# Change back to project root directory
 os.chdir("..")
-        
-# All done can exit now
+
 print("Development environment set up successfully")
 exit(0)
