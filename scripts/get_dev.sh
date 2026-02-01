@@ -1,7 +1,17 @@
 # warn that this script should be sourced, not executed
-if [ "$0" = "$BASH_SOURCE" ]; then
-    echo "This script should be sourced, not executed. Try running: source $BASH_SOURCE"
-    exit 1
+# Works with both bash and zsh (macOS default)
+if [ -n "$BASH_SOURCE" ]; then
+    # Bash
+    if [ "$0" = "$BASH_SOURCE" ]; then
+        echo "This script should be sourced, not executed. Try running: source $BASH_SOURCE"
+        exit 1
+    fi
+elif [ -n "$ZSH_VERSION" ]; then
+    # Zsh
+    if [ "$0" = "${(%):-%x}" ] 2>/dev/null || [ "$ZSH_EVAL_CONTEXT" = "toplevel" ]; then
+        echo "This script should be sourced, not executed. Try running: source $0"
+        exit 1
+    fi
 fi
 
 # export esp-idf 

@@ -11,10 +11,10 @@ TARGET_ADF_VERSION = "release/v2.x"
 
 def detect_os():
     os_name = platform.system()
-    if os_name == "Linux" or os_name == "Windows":
+    if os_name in ("Linux", "Windows", "Darwin"):
         return os_name
     else:
-        print("Unsupported OS")
+        print(f"Unsupported OS: {os_name}")
         exit(1)
 
 def run_command(cmd, error_msg):
@@ -80,7 +80,7 @@ print("Initialized IDF submodules")
 # Step 6: Go back to ADF and run install script
 os.chdir("..")
 
-if os_name == "Linux":
+if os_name == "Linux" or os_name == "Darwin":
     run_command(["./install.sh"], "Error installing ADF dependencies")
 elif os_name == "Windows":
     run_command(["install.bat"], "Error installing ADF dependencies")
