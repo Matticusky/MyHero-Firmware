@@ -264,20 +264,13 @@ static int ble_gap_event_handler(struct ble_gap_event *event, void *arg) {
         break;
 
     case BLE_GAP_EVENT_SUBSCRIBE:
-        ESP_LOGI(TAG, "Subscribe: conn_handle=%d, attr_handle=%d, "
-                 "cur_notify=%d, cur_indicate=%d",
-                 event->subscribe.conn_handle,
+        ESP_LOGD(TAG, "Subscribe: attr_handle=%d, notify=%d",
                  event->subscribe.attr_handle,
-                 event->subscribe.cur_notify,
-                 event->subscribe.cur_indicate);
+                 event->subscribe.cur_notify);
         break;
 
     case BLE_GAP_EVENT_NOTIFY_TX:
-        ESP_LOGD(TAG, "Notify TX: status=%d", event->notify_tx.status);
-        break;
-
     default:
-        ESP_LOGD(TAG, "GAP event: %d", event->type);
         break;
     }
 
