@@ -30,7 +30,7 @@
 #include <services/gatt/ble_svc_gatt.h>
 
 // Preferred MTU size (max 512 for BLE 4.2+)
-#define BLE_PREFERRED_MTU 256
+#define BLE_PREFERRED_MTU 512
 
 static const char *TAG = "BLE";
 
@@ -182,6 +182,24 @@ static int ble_gap_event_handler(struct ble_gap_event *event, void *arg) {
                 ESP_LOGW(TAG, "Failed to request MTU exchange: %d", rc);
             }
 
+            // Request faster connection parameters for higher throughput
+            // Min interval: 7.5ms (6 * 1.25ms), Max interval: 15ms (12 * 1.25ms)
+            // Latency: 0, Supervision timeout: 4s (400 * 10ms)
+            struct ble_gap_upd_params conn_params = {
+                .itvl_min = 6,    // 7.5ms (fastest allowed)
+                .itvl_max = 12,   // 15ms
+                .latency = 0,     // No slave latency for fastest response
+                .supervision_timeout = 400,  // 4 seconds
+                .min_ce_len = 0,
+                .max_ce_len = 0,
+            };
+            rc = ble_gap_update_params(event->connect.conn_handle, &conn_params);
+            if (rc != 0) {
+                ESP_LOGW(TAG, "Failed to request connection param update: %d", rc);
+            } else {
+                ESP_LOGI(TAG, "Requested fast connection parameters (7.5-15ms interval)");
+            }
+
             // Update GATT module with connection handle
             ble_gatt_set_conn_handle(current_conn_handle);
 
@@ -219,8 +237,15 @@ static int ble_gap_event_handler(struct ble_gap_event *event, void *arg) {
         break;
 
     case BLE_GAP_EVENT_CONN_UPDATE:
-        ESP_LOGI(TAG, "Connection updated; status=%d",
-                 event->conn_update.status);
+        ESP_LOGI(TAG, "Connection updated; status=%d", event->conn_update.status);
+        if (event->conn_update.status == 0) {
+            rc = ble_gap_conn_find(event->conn_update.conn_handle, &desc);
+            if (rc == 0) {
+                ESP_LOGI(TAG, "New conn params: interval=%d (%.2fms), latency=%d, timeout=%d",
+                         desc.conn_itvl, desc.conn_itvl * 1.25,
+                         desc.conn_latency, desc.supervision_timeout);
+            }
+        }
         break;
 
     case BLE_GAP_EVENT_ADV_COMPLETE:

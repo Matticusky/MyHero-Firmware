@@ -200,9 +200,9 @@ esp_err_t storage_scan_audio_files(storage_scan_cb_t callback, void *user_data) 
             continue;
         }
 
-        // Check for .wav extension (case insensitive)
+        // Check for .aac extension (case insensitive)
         const char *ext = strrchr(entry->d_name, '.');
-        if (ext && (strcasecmp(ext, ".wav") == 0)) {
+        if (ext && (strcasecmp(ext, ".aac") == 0)) {
             snprintf(full_path, sizeof(full_path), "%s/%s", base_path, entry->d_name);
             callback(full_path, user_data);
             file_count++;
@@ -225,7 +225,7 @@ esp_err_t storage_generate_recording_path(char *path_buf, size_t buf_size) {
     DIR *dir = opendir(base_path);
     if (!dir) {
         // Directory doesn't exist or error - start at 0001
-        snprintf(path_buf, buf_size, "%s/recording_0001.wav", base_path);
+        snprintf(path_buf, buf_size, "%s/recording_0001.aac", base_path);
         ESP_LOGI(TAG, "Generated recording path: %s", path_buf);
         return ESP_OK;
     }
@@ -233,8 +233,8 @@ esp_err_t storage_generate_recording_path(char *path_buf, size_t buf_size) {
     struct dirent *entry;
     while ((entry = readdir(dir)) != NULL) {
         int num;
-        // Match pattern: recording_NNNN.wav
-        if (sscanf(entry->d_name, "recording_%d.wav", &num) == 1) {
+        // Match pattern: recording_NNNN.aac
+        if (sscanf(entry->d_name, "recording_%d.aac", &num) == 1) {
             if (num > max_num) {
                 max_num = num;
             }
@@ -242,7 +242,7 @@ esp_err_t storage_generate_recording_path(char *path_buf, size_t buf_size) {
     }
     closedir(dir);
 
-    snprintf(path_buf, buf_size, "%s/recording_%04d.wav", base_path, max_num + 1);
+    snprintf(path_buf, buf_size, "%s/recording_%04d.aac", base_path, max_num + 1);
     ESP_LOGI(TAG, "Generated recording path: %s", path_buf);
     return ESP_OK;
 }

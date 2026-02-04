@@ -11,8 +11,8 @@
 #include <audio_mem.h>
 #include <audio_common.h>
 #include <i2s_stream.h>
-#include <wav_encoder.h>
-#include <wav_decoder.h>
+#include <aac_encoder.h>
+#include <aac_decoder.h>
 #include <fatfs_stream.h>
 #include <audio_alc.h>
 #include <driver/gpio.h>
@@ -148,11 +148,11 @@ static void playback_task(void *pvParameters) {
         goto cleanup;
     }
 
-    // WAV Decoder
-    wav_decoder_cfg_t wav_cfg = DEFAULT_WAV_DECODER_CONFIG();
-    audio_element_handle_t wav_dec = wav_decoder_init(&wav_cfg);
-    if (!wav_dec) {
-        ESP_LOGE(TAG, "Failed to create WAV decoder");
+    // AAC Decoder
+    aac_decoder_cfg_t aac_cfg = DEFAULT_AAC_DECODER_CONFIG();
+    audio_element_handle_t aac_dec = aac_decoder_init(&aac_cfg);
+    if (!aac_dec) {
+        ESP_LOGE(TAG, "Failed to create AAC decoder");
         audio_element_deinit(fatfs_reader);
         goto cleanup;
     }
@@ -163,7 +163,7 @@ static void playback_task(void *pvParameters) {
     if (!alc_el) {
         ESP_LOGE(TAG, "Failed to create ALC element");
         audio_element_deinit(fatfs_reader);
-        audio_element_deinit(wav_dec);
+        audio_element_deinit(aac_dec);
         goto cleanup;
     }
 
@@ -184,7 +184,7 @@ static void playback_task(void *pvParameters) {
     if (!i2s_writer) {
         ESP_LOGE(TAG, "Failed to create I2S writer");
         audio_element_deinit(fatfs_reader);
-        audio_element_deinit(wav_dec);
+        audio_element_deinit(aac_dec);
         audio_element_deinit(alc_el);
         goto cleanup;
     }
@@ -195,19 +195,19 @@ static void playback_task(void *pvParameters) {
     if (!pipeline) {
         ESP_LOGE(TAG, "Failed to create pipeline");
         audio_element_deinit(fatfs_reader);
-        audio_element_deinit(wav_dec);
+        audio_element_deinit(aac_dec);
         audio_element_deinit(alc_el);
         audio_element_deinit(i2s_writer);
         goto cleanup;
     }
 
-    // Register and link elements: file → wav → alc → i2s
+    // Register and link elements: file → aac → alc → i2s
     audio_pipeline_register(pipeline, fatfs_reader, "file");
-    audio_pipeline_register(pipeline, wav_dec, "wav");
+    audio_pipeline_register(pipeline, aac_dec, "aac");
     audio_pipeline_register(pipeline, alc_el, "alc");
     audio_pipeline_register(pipeline, i2s_writer, "i2s");
 
-    const char *link_tag[] = {"file", "wav", "alc", "i2s"};
+    const char *link_tag[] = {"file", "aac", "alc", "i2s"};
     audio_pipeline_link(pipeline, link_tag, 4);
 
     // Set file URI
@@ -242,11 +242,11 @@ static void playback_task(void *pvParameters) {
         if (ret == ESP_OK) {
             // Handle music info
             if (msg.source_type == AUDIO_ELEMENT_TYPE_ELEMENT &&
-                msg.source == (void *)wav_dec &&
+                msg.source == (void *)aac_dec &&
                 msg.cmd == AEL_MSG_CMD_REPORT_MUSIC_INFO) {
 
                 audio_element_info_t info;
-                audio_element_getinfo(wav_dec, &info);
+                audio_element_getinfo(aac_dec, &info);
                 ESP_LOGI(TAG, "Music info: %d Hz, %d ch, %d bits",
                          info.sample_rates, info.channels, info.bits);
                 i2s_stream_set_clk(i2s_writer, info.sample_rates, info.bits, info.channels);
@@ -282,15 +282,15 @@ static void playback_task(void *pvParameters) {
     audio_pipeline_wait_for_stop(pipeline);
     audio_event_iface_destroy(evt);
     audio_pipeline_unregister(pipeline, fatfs_reader);
-    audio_pipeline_unregister(pipeline, wav_dec);
+    audio_pipeline_unregister(pipeline, aac_dec);
     audio_pipeline_unregister(pipeline, alc_el);
     audio_pipeline_unregister(pipeline, i2s_writer);
     audio_pipeline_deinit(pipeline);
     audio_element_deinit(fatfs_reader);
-    audio_element_deinit(wav_dec);
+    audio_element_deinit(aac_dec);
     audio_element_deinit(alc_el);
     audio_element_deinit(i2s_writer);
-    ESP_LOGI(TAG, "Pipeline cleaned up");
+    ESP_LOGI(TAG, "Playback pipeline cleaned up");
 
     disable_speaker();
 
@@ -425,7 +425,7 @@ static void recording_task(void *pvParameters) {
     i2s_cfg.pdm_rx_cfg.slot_cfg.data_bit_width = I2S_DATA_BIT_WIDTH_16BIT;
     i2s_cfg.pdm_rx_cfg.slot_cfg.slot_bit_width = I2S_SLOT_BIT_WIDTH_AUTO;
     i2s_cfg.pdm_rx_cfg.slot_cfg.slot_mode = I2S_SLOT_MODE_MONO;
-    i2s_cfg.pdm_rx_cfg.slot_cfg.slot_mask = I2S_PDM_SLOT_RIGHT
+    i2s_cfg.pdm_rx_cfg.slot_cfg.slot_mask = I2S_PDM_SLOT_RIGHT;
 
     // PDM GPIO pins (CLK=35, DIN=36)
     i2s_cfg.pdm_rx_cfg.gpio_cfg.clk = GPIO_NUM_35;
@@ -437,11 +437,14 @@ static void recording_task(void *pvParameters) {
         goto cleanup;
     }
 
-    // WAV Encoder (16kHz, 16-bit, mono)
-    wav_encoder_cfg_t wav_cfg = DEFAULT_WAV_ENCODER_CONFIG();
-    audio_element_handle_t wav_enc = wav_encoder_init(&wav_cfg);
-    if (!wav_enc) {
-        ESP_LOGE(TAG, "Failed to create WAV encoder");
+    // AAC Encoder (16kHz, 16-bit, mono)
+    aac_encoder_cfg_t aac_cfg = DEFAULT_AAC_ENCODER_CONFIG();
+    aac_cfg.sample_rate = 16000;  // Match I2S input sample rate
+    aac_cfg.channel = 1;          // Mono
+    aac_cfg.bitrate = 32000;      // 32kbps for 16kHz mono (good quality, small size)
+    audio_element_handle_t aac_enc = aac_encoder_init(&aac_cfg);
+    if (!aac_enc) {
+        ESP_LOGE(TAG, "Failed to create AAC encoder");
         audio_element_deinit(i2s_reader);
         goto cleanup;
     }
@@ -453,7 +456,7 @@ static void recording_task(void *pvParameters) {
     if (!fatfs_writer) {
         ESP_LOGE(TAG, "Failed to create FATFS writer");
         audio_element_deinit(i2s_reader);
-        audio_element_deinit(wav_enc);
+        audio_element_deinit(aac_enc);
         goto cleanup;
     }
 
@@ -463,17 +466,17 @@ static void recording_task(void *pvParameters) {
     if (!pipeline) {
         ESP_LOGE(TAG, "Failed to create recording pipeline");
         audio_element_deinit(i2s_reader);
-        audio_element_deinit(wav_enc);
+        audio_element_deinit(aac_enc);
         audio_element_deinit(fatfs_writer);
         goto cleanup;
     }
 
-    // Register and link elements
+    // Register and link elements: i2s → aac → file
     audio_pipeline_register(pipeline, i2s_reader, "i2s");
-    audio_pipeline_register(pipeline, wav_enc, "wav");
+    audio_pipeline_register(pipeline, aac_enc, "aac");
     audio_pipeline_register(pipeline, fatfs_writer, "file");
 
-    const char *link_tag[] = {"i2s", "wav", "file"};
+    const char *link_tag[] = {"i2s", "aac", "file"};
     audio_pipeline_link(pipeline, link_tag, 3);
 
     // Set output file
@@ -504,11 +507,11 @@ static void recording_task(void *pvParameters) {
     audio_pipeline_stop(pipeline);
     audio_pipeline_wait_for_stop(pipeline);
     audio_pipeline_unregister(pipeline, i2s_reader);
-    audio_pipeline_unregister(pipeline, wav_enc);
+    audio_pipeline_unregister(pipeline, aac_enc);
     audio_pipeline_unregister(pipeline, fatfs_writer);
     audio_pipeline_deinit(pipeline);
     audio_element_deinit(i2s_reader);
-    audio_element_deinit(wav_enc);
+    audio_element_deinit(aac_enc);
     audio_element_deinit(fatfs_writer);
 
     ESP_LOGI(TAG, "========================================");

@@ -153,10 +153,11 @@ static const struct ble_gatt_svc_def gatt_svr_svcs[] = {
             },
             {
                 // Transfer Data - file data chunks
+                // Write: upload chunks, Read: download chunks
                 .uuid = &transfer_data_uuid.u,
                 .access_cb = transfer_data_access,
                 .val_handle = &transfer_data_handle,
-                .flags = BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_NOTIFY,
+                .flags = BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_NOTIFY,
             },
             {
                 // Transfer Progress - current progress
@@ -308,55 +309,68 @@ static int file_delete_access(uint16_t conn_handle, uint16_t attr_handle,
 
 static int transfer_ctrl_access(uint16_t conn_handle, uint16_t attr_handle,
                                  struct ble_gatt_access_ctxt *ctxt, void *arg) {
+    ESP_LOGI(TAG, "[TRANSFER_CTRL] op=%d, conn=%d", ctxt->op, conn_handle);
+
     if (!ble_auth_is_authenticated()) {
-        ESP_LOGW(TAG, "Transfer rejected - not authenticated");
+        ESP_LOGW(TAG, "[TRANSFER_CTRL] Rejected - not authenticated");
         return BLE_ATT_ERR_INSUFFICIENT_AUTHEN;
     }
 
     if (ctxt->op != BLE_GATT_ACCESS_OP_WRITE_CHR) {
+        ESP_LOGW(TAG, "[TRANSFER_CTRL] Not a write op: %d", ctxt->op);
         return BLE_ATT_ERR_UNLIKELY;
     }
 
     uint16_t len = OS_MBUF_PKTLEN(ctxt->om);
+    ESP_LOGI(TAG, "[TRANSFER_CTRL] WRITE len=%d", len);
+
     if (len < 1) {
+        ESP_LOGE(TAG, "[TRANSFER_CTRL] Invalid length: %d", len);
         return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
     }
 
     uint8_t buf[256];
     int rc = ble_hs_mbuf_to_flat(ctxt->om, buf, sizeof(buf) - 1, NULL);
     if (rc != 0) {
+        ESP_LOGE(TAG, "[TRANSFER_CTRL] Failed to flatten mbuf");
         return BLE_ATT_ERR_UNLIKELY;
     }
 
     uint8_t opcode = buf[0];
+    ESP_LOGI(TAG, "[TRANSFER_CTRL] Opcode=0x%02X (0=CANCEL, 1=UPLOAD, 2=DOWNLOAD)", opcode);
 
     if (opcode == BLE_TRANSFER_OP_CANCEL) {
         // Cancel transfer
+        ESP_LOGI(TAG, "[TRANSFER_CTRL] CANCEL requested");
         ble_transfer_cancel();
-        ESP_LOGI(TAG, "Transfer cancelled");
     } else if (opcode == BLE_TRANSFER_OP_UPLOAD) {
         // Upload: [0x01][size:4][filename\0]
         if (len < 6) {
+            ESP_LOGE(TAG, "[TRANSFER_CTRL] Upload: invalid len %d (need >= 6)", len);
             return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
         }
         uint32_t size = buf[1] | (buf[2] << 8) | (buf[3] << 16) | (buf[4] << 24);
         char *filename = (char *)&buf[5];
         filename[len - 5] = '\0';  // Ensure null termination
 
-        ESP_LOGI(TAG, "Upload request: %s (%lu bytes)", filename, (unsigned long)size);
-        ble_transfer_start_upload(filename, size, conn_handle);
+        ESP_LOGI(TAG, "[TRANSFER_CTRL] UPLOAD request: file='%s', size=%lu",
+                 filename, (unsigned long)size);
+        esp_err_t err = ble_transfer_start_upload(filename, size, conn_handle);
+        ESP_LOGI(TAG, "[TRANSFER_CTRL] start_upload returned %d", err);
     } else if (opcode == BLE_TRANSFER_OP_DOWNLOAD) {
         // Download: [0x02][filename\0]
         if (len < 2) {
+            ESP_LOGE(TAG, "[TRANSFER_CTRL] Download: invalid len %d (need >= 2)", len);
             return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
         }
         char *filename = (char *)&buf[1];
         filename[len - 1] = '\0';
 
-        ESP_LOGI(TAG, "Download request: %s", filename);
-        ble_transfer_start_download(filename, conn_handle);
+        ESP_LOGI(TAG, "[TRANSFER_CTRL] DOWNLOAD request: file='%s'", filename);
+        esp_err_t err = ble_transfer_start_download(filename, conn_handle);
+        ESP_LOGI(TAG, "[TRANSFER_CTRL] start_download returned %d", err);
     } else {
-        ESP_LOGW(TAG, "Unknown transfer opcode: 0x%02X", opcode);
+        ESP_LOGW(TAG, "[TRANSFER_CTRL] Unknown opcode: 0x%02X", opcode);
         return BLE_ATT_ERR_UNLIKELY;
     }
 
@@ -365,32 +379,71 @@ static int transfer_ctrl_access(uint16_t conn_handle, uint16_t attr_handle,
 
 static int transfer_data_access(uint16_t conn_handle, uint16_t attr_handle,
                                  struct ble_gatt_access_ctxt *ctxt, void *arg) {
+    ESP_LOGI(TAG, "[TRANSFER_DATA] op=%d (0=READ, 2=WRITE), conn=%d",
+             ctxt->op, conn_handle);
+
     if (!ble_auth_is_authenticated()) {
+        ESP_LOGW(TAG, "[TRANSFER_DATA] Rejected - not authenticated");
         return BLE_ATT_ERR_INSUFFICIENT_AUTHEN;
     }
 
-    if (ctxt->op != BLE_GATT_ACCESS_OP_WRITE_CHR) {
-        return BLE_ATT_ERR_UNLIKELY;
+    if (ctxt->op == BLE_GATT_ACCESS_OP_READ_CHR) {
+        // Download: app reads chunk data
+        ESP_LOGI(TAG, "[TRANSFER_DATA] READ request from app");
+
+        const uint8_t *chunk_data;
+        size_t chunk_len;
+
+        esp_err_t err = ble_transfer_get_chunk_data(&chunk_data, &chunk_len);
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "[TRANSFER_DATA] No chunk data available for read (err=%d)", err);
+            return BLE_ATT_ERR_UNLIKELY;
+        }
+
+        ESP_LOGI(TAG, "[TRANSFER_DATA] Returning %d bytes to app", (int)chunk_len);
+
+        int rc = os_mbuf_append(ctxt->om, chunk_data, chunk_len);
+        if (rc != 0) {
+            ESP_LOGE(TAG, "[TRANSFER_DATA] Failed to append data to mbuf (rc=%d)", rc);
+            return BLE_ATT_ERR_INSUFFICIENT_RES;
+        }
+
+        // Mark chunk as read and prepare next (will notify when ready)
+        ESP_LOGI(TAG, "[TRANSFER_DATA] Calling chunk_read_complete");
+        ble_transfer_chunk_read_complete();
+
+        return 0;
     }
 
-    uint16_t len = OS_MBUF_PKTLEN(ctxt->om);
-    if (len == 0 || len > BLE_TRANSFER_CHUNK_ENC_SIZE) {
-        return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+    if (ctxt->op == BLE_GATT_ACCESS_OP_WRITE_CHR) {
+        // Upload: app writes chunk data
+        uint16_t len = OS_MBUF_PKTLEN(ctxt->om);
+        ESP_LOGI(TAG, "[TRANSFER_DATA] WRITE request from app, len=%d", len);
+
+        if (len == 0 || len > BLE_TRANSFER_CHUNK_SIZE) {
+            ESP_LOGE(TAG, "[TRANSFER_DATA] Invalid length: %d", len);
+            return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+        }
+
+        uint8_t data[BLE_TRANSFER_CHUNK_SIZE + 1];
+        int rc = ble_hs_mbuf_to_flat(ctxt->om, data, len, NULL);
+        if (rc != 0) {
+            ESP_LOGE(TAG, "[TRANSFER_DATA] Failed to flatten mbuf (rc=%d)", rc);
+            return BLE_ATT_ERR_UNLIKELY;
+        }
+
+        esp_err_t err = ble_transfer_receive_chunk(data, len);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "[TRANSFER_DATA] Failed to process data chunk (err=%d)", err);
+            return BLE_ATT_ERR_UNLIKELY;
+        }
+
+        ESP_LOGI(TAG, "[TRANSFER_DATA] Chunk processed successfully");
+        return 0;
     }
 
-    uint8_t data[BLE_TRANSFER_CHUNK_ENC_SIZE + 1];
-    int rc = ble_hs_mbuf_to_flat(ctxt->om, data, len, NULL);
-    if (rc != 0) {
-        return BLE_ATT_ERR_UNLIKELY;
-    }
-
-    esp_err_t err = ble_transfer_receive_chunk(data, len);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to process data chunk");
-        return BLE_ATT_ERR_UNLIKELY;
-    }
-
-    return 0;
+    ESP_LOGW(TAG, "[TRANSFER_DATA] Unknown op: %d", ctxt->op);
+    return BLE_ATT_ERR_UNLIKELY;
 }
 
 static int transfer_progress_access(uint16_t conn_handle, uint16_t attr_handle,

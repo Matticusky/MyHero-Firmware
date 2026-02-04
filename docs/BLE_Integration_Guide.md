@@ -170,13 +170,13 @@ The device uses app-level authentication (not BLE pairing/bonding). A 32-byte ke
 | size | 4 bytes | File size in bytes (little-endian), 0 for directories |
 | filename | variable | Null-terminated filename only (no path) |
 
-**Note:** Only the filename is sent (e.g., `recording_0001.wav`), not the full path. The device storage path (`/Storage/`) is internal and not relevant to the phone app.
+**Note:** Only the filename is sent (e.g., `recording_0001.aac`), not the full path. The device storage path (`/Storage/`) is internal and not relevant to the phone app.
 
 **Example:**
 ```
 Notification 1: 00 80 1A 06 00 74 65 73 74 2E 61 61 63 00
                 │  └──────────┘ └────────────────────────┘
-                │     400000         "test.wav\0"
+                │     400000         "test.aac\0"
                 └─ type=file
 
 Notification 2: FF 00 00 00 00
@@ -192,14 +192,14 @@ Notification 2: FF 00 00 00 00
 
 **Usage:**
 - Write the file path to delete
-- Path can be relative (e.g., `test.wav`) or absolute (e.g., `/Storage/test.wav`)
+- Path can be relative (e.g., `recording_0001.aac`) or absolute (e.g., `/Storage/recording_0001.aac`)
 - Relative paths are prefixed with `/Storage/`
 
 ---
 
 ## 5. File Transfer Protocol
 
-File transfer uses Base64 encoding to ensure reliable transmission over BLE.
+File transfer uses raw binary data for efficient transmission over BLE. The device negotiates a higher MTU (512 bytes) for optimal throughput.
 
 ### Transfer Characteristics
 
@@ -229,13 +229,17 @@ File transfer uses Base64 encoding to ensure reliable transmission over BLE.
 | Property | Value |
 |----------|-------|
 | UUID | `00000204-4D59-4842-8000-00805F9B34FB` |
-| Properties | Write, Notify |
-| Chunk Size | Max 240 bytes (Base64 encoded) = 180 raw bytes |
+| Properties | Write, Read, Notify |
+| Chunk Size | Max 490 bytes (raw binary) |
+
+**Usage:**
+- **Upload (Write):** App writes raw binary chunks to this characteristic
+- **Download (Notify + Read):** Device notifies when chunk is ready, app reads to retrieve data
 
 **Encoding:**
-- All data is **Base64 encoded**
-- Max 240 Base64 characters per chunk = 180 raw bytes decoded
-- Use standard Base64 alphabet (A-Z, a-z, 0-9, +, /)
+- All data is **raw binary** (no encoding)
+- Max 490 bytes per chunk
+- With MTU 512, max ATT payload is 509 bytes; 490 leaves margin for protocol overhead
 
 #### 5.3 Transfer Progress
 | Property | Value |
@@ -262,7 +266,7 @@ File transfer uses Base64 encoding to ensure reliable transmission over BLE.
 │    │ ◄─────────────────────────────────────  │                   │
 │    │                                         │                   │
 │    │  3. Write Transfer Data                 │                   │
-│    │     [Base64 chunk 1]                    │                   │
+│    │     [raw binary chunk 1]                │                   │
 │    │ ─────────────────────────────────────►  │                   │
 │    │                                         │                   │
 │    │  4. Notify Transfer Progress            │                   │
@@ -280,6 +284,8 @@ File transfer uses Base64 encoding to ensure reliable transmission over BLE.
 
 ### Download Flow (Device → Phone)
 
+The download flow uses a **read-based** approach where the app controls the pace by reading chunks when ready.
+
 ```
 ┌──────────────────────────────────────────────────────────────────┐
 │                       DOWNLOAD FLOW                              │
@@ -291,26 +297,43 @@ File transfer uses Base64 encoding to ensure reliable transmission over BLE.
 │    │     [0x02][filename\0]                  │                   │
 │    │ ─────────────────────────────────────►  │                   │
 │    │                                         │                   │
-│    │  2. Notify Transfer Control             │                   │
+│    │  2. Notify Transfer Data                │                   │
 │    │     [0x01][size:4] (Ready + file size)  │                   │
 │    │ ◄─────────────────────────────────────  │                   │
 │    │                                         │                   │
-│    │  3. Notify Transfer Data                │                   │
-│    │     [Base64 chunk 1]                    │                   │
+│    │  3. Read Transfer Data                  │                   │
+│    │ ─────────────────────────────────────►  │                   │
+│    │  Response: [raw binary chunk 1]         │                   │
 │    │ ◄─────────────────────────────────────  │                   │
 │    │                                         │                   │
-│    │  4. Notify Transfer Progress            │                   │
+│    │  4. Notify Transfer Data                │                   │
+│    │     [0x01][chunk_len:4] (Next ready)    │                   │
+│    │ ◄─────────────────────────────────────  │                   │
+│    │                                         │                   │
+│    │  5. Notify Transfer Progress            │                   │
 │    │     [transferred:4][total:4]            │                   │
 │    │ ◄─────────────────────────────────────  │                   │
 │    │                                         │                   │
-│    │  ... device sends all chunks            │                   │
+│    │  6. Read Transfer Data                  │                   │
+│    │ ─────────────────────────────────────►  │                   │
+│    │  Response: [raw binary chunk 2]         │                   │
+│    │ ◄─────────────────────────────────────  │                   │
 │    │                                         │                   │
-│    │  5. Notify Transfer Control             │                   │
-│    │     [0x02][size:4] (Complete)           │                   │
+│    │  ... repeat steps 4-6 for all chunks    │                   │
+│    │                                         │                   │
+│    │  7. Notify Transfer Control             │                   │
+│    │     [0x02][0:4] (Complete)              │                   │
 │    │ ◄─────────────────────────────────────  │                   │
 │    │                                         │                   │
 └──────────────────────────────────────────────────────────────────┘
 ```
+
+**Transfer Data Notifications (Download):**
+
+| Status | Value | Format | Description |
+|--------|-------|--------|-------------|
+| Error | `0x00` | `[0x00][0:4]` | Transfer failed |
+| Ready | `0x01` | `[0x01][size:4]` | Chunk ready, size = file size (first) or chunk length (subsequent) |
 
 ### Transfer Cancellation
 
@@ -350,15 +373,16 @@ All multi-byte integers are **little-endian**.
 ### String Encoding
 All strings are **null-terminated UTF-8**.
 
-### Base64 Encoding
-- Standard Base64 alphabet: `A-Za-z0-9+/`
-- Padding with `=` as needed
-- Max encoded chunk: 240 characters
-- Max decoded chunk: 180 bytes
+### Binary Transfer
+- Data is transferred as raw binary (no encoding)
+- Max chunk size: 490 bytes
+- MTU negotiated to 512 bytes for optimal throughput
+- Connection interval optimized to 7.5-15ms for fast transfer
 
 ### File Paths
 - Storage root: `/Storage/`
-- Supported audio format: AAC (`.wav` extension)
+- Supported audio format: AAC (`.aac` extension)
+- Recording filename pattern: `recording_NNNN.aac`
 - Relative paths are auto-prefixed with `/Storage/`
 
 ---
@@ -417,21 +441,22 @@ When Transfer Control notifies with status `0x00` (Error):
    - Collect notifications until type=0xFF received
 
 5. DOWNLOAD FILE
-   - Write [0x02]["recording1.wav\0"] to Transfer Control
-   - Receive Ready notification with file size
-   - Collect Transfer Data notifications
-   - Decode Base64 chunks and write to local file
-   - Receive Complete notification
+   - Write [0x02]["recording_0001.aac\0"] to Transfer Control
+   - Receive Ready notification on Transfer Data with file size
+   - Read Transfer Data to get raw binary chunk
+   - Wait for next Ready notification, then read again
+   - Write raw chunks directly to local file
+   - Receive Complete notification on Transfer Control
 
 6. UPLOAD FILE
-   - Write [0x01][file_size:4]["newfile.wav\0"] to Transfer Control
+   - Write [0x01][file_size:4]["newfile.aac\0"] to Transfer Control
    - Wait for Ready notification
-   - Encode file data as Base64 chunks (max 240 chars each)
+   - Send raw binary chunks (max 490 bytes each)
    - Write chunks to Transfer Data
    - Wait for Complete notification
 
 7. DELETE FILE
-   - Write ["recording1.wav\0"] to File Delete
+   - Write ["recording_0001.aac\0"] to File Delete
 
 8. DISCONNECT
    - Disconnect gracefully
@@ -475,29 +500,49 @@ async function uploadFile(filename, fileData) {
     await writeCharacteristic(TRANSFER_CONTROL_UUID, command);
     // Wait for Ready notification
 
-    // Send chunks
-    for (let i = 0; i < fileData.length; i += 180) {
-        const chunk = fileData.slice(i, i + 180);
-        const base64Chunk = base64Encode(chunk);
-        await writeCharacteristic(TRANSFER_DATA_UUID, stringToBytes(base64Chunk));
+    // Send raw binary chunks (max 490 bytes each)
+    for (let i = 0; i < fileData.length; i += 490) {
+        const chunk = fileData.slice(i, i + 490);
+        await writeCharacteristic(TRANSFER_DATA_UUID, chunk);
     }
 
     // Wait for Complete notification
 }
 
-// Download File
+// Download File (read-based flow)
 async function downloadFile(filename) {
     const chunks = [];
+    let transferComplete = false;
+    let fileSize = 0;
 
-    subscribeToNotifications(TRANSFER_DATA_UUID, (data) => {
-        const decoded = base64Decode(bytesToString(data));
-        chunks.push(decoded);
+    // Subscribe to Transfer Data notifications (ready signals)
+    subscribeToNotifications(TRANSFER_DATA_UUID, async (data) => {
+        const status = data[0];
+        if (status === 0x01) {
+            // Ready - read the chunk (raw binary)
+            const size = readUint32LE(data, 1);
+            if (fileSize === 0) fileSize = size; // First notification has file size
+
+            const chunkData = await readCharacteristic(TRANSFER_DATA_UUID);
+            chunks.push(chunkData); // Raw binary, no decoding needed
+        }
     });
 
+    // Subscribe to Transfer Control for completion
+    subscribeToNotifications(TRANSFER_CONTROL_UUID, (data) => {
+        if (data[0] === 0x02) {
+            transferComplete = true;
+        }
+    });
+
+    // Start download
     const command = new Uint8Array([0x02, ...stringToBytes(filename), 0]);
     await writeCharacteristic(TRANSFER_CONTROL_UUID, command);
 
     // Wait for Complete notification
+    while (!transferComplete) {
+        await delay(10);
+    }
     return concatenateArrays(chunks);
 }
 ```
@@ -541,6 +586,8 @@ async function downloadFile(filename) {
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 1.2 | 2026-02-04 | Removed Base64 encoding for faster transfer. Now uses raw binary (490 bytes/chunk). MTU increased to 512. Optimized connection parameters (7.5-15ms interval). |
+| 1.1 | 2026-02-04 | Changed download flow to read-based (app reads chunks instead of receiving via notify). Changed audio format from WAV to AAC. |
 | 1.0 | 2026-02-01 | Initial release |
 
 ---

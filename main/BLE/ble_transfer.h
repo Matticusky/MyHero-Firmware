@@ -10,11 +10,10 @@
 extern "C" {
 #endif
 
-// Base64 chunk sizes
-// Raw bytes per chunk (decodes from 240 base64 chars)
-#define BLE_TRANSFER_CHUNK_RAW_SIZE   180
-// Base64 encoded size (240 chars for 180 bytes)
-#define BLE_TRANSFER_CHUNK_ENC_SIZE   240
+// Chunk size for raw binary transfer (no Base64)
+// With MTU=512, max ATT payload is 509 bytes (MTU - 3)
+// Use 490 bytes to leave margin for protocol overhead
+#define BLE_TRANSFER_CHUNK_SIZE   490
 
 // Internal transfer states (more detailed than public API)
 typedef enum {
@@ -60,20 +59,39 @@ esp_err_t ble_transfer_start_upload(const char *filename, uint32_t total_size,
 esp_err_t ble_transfer_start_download(const char *filename, uint16_t conn_handle);
 
 /**
- * @brief Receive a base64 encoded data chunk (for upload)
+ * @brief Receive a raw binary data chunk (for upload)
  *
- * @param data Base64 encoded data
+ * @param data Raw binary data
  * @param len Length of data
  * @return ESP_OK on success
  */
 esp_err_t ble_transfer_receive_chunk(const uint8_t *data, size_t len);
 
 /**
- * @brief Send next download chunk (called after phone acknowledges receipt)
+ * @brief Prepare next download chunk into internal buffer
  *
- * @return ESP_OK on success, ESP_ERR_FINISHED when complete
+ * Call this to load the next chunk from file into buffer.
+ * App will then read via ble_transfer_get_chunk_data().
+ *
+ * @return ESP_OK on success, ESP_ERR_NOT_FINISHED when complete
  */
-esp_err_t ble_transfer_send_next_chunk(void);
+esp_err_t ble_transfer_prepare_next_chunk(void);
+
+/**
+ * @brief Get pointer to current chunk data for reading
+ *
+ * @param[out] data Pointer to chunk buffer
+ * @param[out] len Length of data in buffer
+ * @return ESP_OK if chunk is ready, ESP_ERR_INVALID_STATE if no chunk available
+ */
+esp_err_t ble_transfer_get_chunk_data(const uint8_t **data, size_t *len);
+
+/**
+ * @brief Mark current chunk as read by app, prepare next
+ *
+ * Called after app reads the chunk. Prepares next chunk and notifies.
+ */
+void ble_transfer_chunk_read_complete(void);
 
 /**
  * @brief Cancel ongoing transfer
